@@ -1,4 +1,4 @@
-"""Config flow: "Create helper → WLED Alerts" offers a Zone or an Alert."""
+"""Config flow: zones are config entries, alerts are subentries of a zone."""
 
 from __future__ import annotations
 
@@ -9,7 +9,14 @@ try:  # HA 2026.9+ ships probatio; older releases use voluptuous (same API)
 except ImportError:  # pragma: no cover
     import voluptuous as vol
 
-from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult, OptionsFlowWithReload
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    OptionsFlow,
+    SubentryFlowResult,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers import selector
@@ -24,7 +31,6 @@ from .const import (
     CONF_COLOR,
     CONF_DELAY,
     CONF_DISMISSIBLE,
-    CONF_ENTRY_TYPE,
     CONF_FULL_STRIP,
     CONF_GAP,
     CONF_HOST,
@@ -37,7 +43,6 @@ from .const import (
     CONF_START,
     CONF_STYLE,
     CONF_TEMPLATE,
-    CONF_ZONES,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR,
@@ -50,8 +55,7 @@ from .const import (
     STYLE_FLASH,
     STYLE_PULSE,
     STYLE_SOLID,
-    TYPE_ALERT,
-    TYPE_ZONE,
+    SUBENTRY_ALERT,
 )
 from .wled import WledError, WledStrip
 
@@ -64,14 +68,6 @@ def _wled_hosts(hass: HomeAssistant) -> list[selector.SelectOptionDict]:
         selector.SelectOptionDict(value=e.data["host"], label=f"{e.title} ({e.data['host']})")
         for e in hass.config_entries.async_entries("wled")
         if e.data.get("host")
-    ]
-
-
-def _zones(hass: HomeAssistant) -> list[selector.SelectOptionDict]:
-    return [
-        selector.SelectOptionDict(value=e.entry_id, label=e.title)
-        for e in hass.config_entries.async_entries(DOMAIN)
-        if e.options.get(CONF_ENTRY_TYPE) == TYPE_ZONE
     ]
 
 
@@ -138,9 +134,6 @@ def alert_schema(hass: HomeAssistant, *, with_name: bool) -> vol.Schema:
             ),
             vol.Required(CONF_DISMISSIBLE, default=False): selector.BooleanSelector(),
             vol.Required(CONF_FULL_STRIP, default=False): selector.BooleanSelector(),
-            vol.Optional(CONF_ZONES): selector.SelectSelector(
-                selector.SelectSelectorConfig(options=_zones(hass), multiple=True)
-            ),
         }
     )
     return vol.Schema(fields)
@@ -181,72 +174,83 @@ def _clean(data: dict[str, Any]) -> dict[str, Any]:
 
 
 class WledAlertsConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Create a zone or an alert."""
+    """Add a zone: a WLED controller plus the LEDs to use."""
 
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Pick what to create."""
-        return self.async_show_menu(step_id="user", menu_options=[TYPE_ZONE, TYPE_ALERT])
-
-    async def async_step_zone(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """A stretch of LEDs on a WLED strip."""
+        """Zone form."""
         errors: dict[str, str] = {}
         if user_input is not None:
             errors = await validate_zone(self.hass, user_input)
             if not errors:
                 name = user_input.pop(CONF_NAME)
-                return self.async_create_entry(
-                    title=name, data={}, options={CONF_ENTRY_TYPE: TYPE_ZONE, **_clean(user_input)}
-                )
+                return self.async_create_entry(title=name, data={}, options=_clean(user_input))
         schema = zone_schema(self.hass, with_name=True)
-        if user_input is not None:
-            schema = self.add_suggested_values_to_schema(schema, user_input)
-        return self.async_show_form(step_id="zone", data_schema=schema, errors=errors)
+        schema = self.add_suggested_values_to_schema(schema, user_input or {CONF_NAME: "Alerts"})
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    async def async_step_alert(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """One thing to show on the LEDs."""
-        if not _zones(self.hass):
-            return self.async_abort(reason="no_zones")
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> WledAlertsOptionsFlow:
+        """Edit the zone (gear icon)."""
+        return WledAlertsOptionsFlow()
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        """Alerts live under their zone ("Add alert")."""
+        return {SUBENTRY_ALERT: AlertSubentryFlow}
+
+
+class WledAlertsOptionsFlow(OptionsFlow):
+    """Edit a zone."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
+        """Same form, pre-filled."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = await validate_zone(self.hass, user_input)
+            if not errors:
+                return self.async_create_entry(data=_clean(user_input))
+        schema = zone_schema(self.hass, with_name=False)
+        schema = self.add_suggested_values_to_schema(schema, user_input or dict(self.config_entry.options))
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+
+
+class AlertSubentryFlow(ConfigSubentryFlow):
+    """Add or edit one alert in a zone."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """New alert."""
         errors: dict[str, str] = {}
         if user_input is not None:
             errors = validate_alert(self.hass, user_input)
             if not errors:
                 name = user_input.pop(CONF_NAME)
-                return self.async_create_entry(
-                    title=name, data={}, options={CONF_ENTRY_TYPE: TYPE_ALERT, **_clean(user_input)}
-                )
+                return self.async_create_entry(title=name, data=_clean(user_input))
         schema = alert_schema(self.hass, with_name=True)
         if user_input is not None:
             schema = self.add_suggested_values_to_schema(schema, user_input)
-        return self.async_show_form(step_id="alert", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
 
-    @staticmethod
-    @callback
-    def async_get_options_flow(config_entry: ConfigEntry) -> WledAlertsOptionsFlow:
-        """Edit an existing zone or alert."""
-        return WledAlertsOptionsFlow()
-
-
-class WledAlertsOptionsFlow(OptionsFlowWithReload):
-    """Edit a zone or alert (the gear icon)."""
-
-    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        """Show the same form, pre-filled."""
-        kind = self.config_entry.options.get(CONF_ENTRY_TYPE)
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        """Edit an alert (its ⋮ menu → Reconfigure)."""
+        subentry = self._get_reconfigure_subentry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            errors = (
-                await validate_zone(self.hass, user_input)
-                if kind == TYPE_ZONE
-                else validate_alert(self.hass, user_input)
-            )
+            errors = validate_alert(self.hass, user_input)
             if not errors:
-                return self.async_create_entry(data={CONF_ENTRY_TYPE: kind, **_clean(user_input)})
-        schema = (
-            zone_schema(self.hass, with_name=False)
-            if kind == TYPE_ZONE
-            else alert_schema(self.hass, with_name=False)
+                name = user_input.pop(CONF_NAME)
+                return self.async_update_and_abort(
+                    self._get_entry(), subentry, title=name, data=_clean(user_input)
+                )
+        schema = alert_schema(self.hass, with_name=True)
+        schema = self.add_suggested_values_to_schema(
+            schema, user_input or {CONF_NAME: subentry.title, **subentry.data}
         )
-        schema = self.add_suggested_values_to_schema(schema, user_input or dict(self.config_entry.options))
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        return self.async_show_form(step_id="reconfigure", data_schema=schema, errors=errors)

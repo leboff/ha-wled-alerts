@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 import logging
 from typing import Any
 
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import TemplateError
 from homeassistant.helpers import entity_registry as er
@@ -44,7 +44,6 @@ from .const import (
     CONF_START,
     CONF_STYLE,
     CONF_TEMPLATE,
-    CONF_ZONES,
     DEFAULT_BLOCK_SIZE,
     DEFAULT_BRIGHTNESS,
     DEFAULT_COLOR,
@@ -81,13 +80,14 @@ def _seconds(value: Any, default: float = 0) -> float:
 class AlertRuntime:
     """One alert: its template, timers and on/off logic."""
 
-    def __init__(self, manager: Manager, entry: ConfigEntry) -> None:
+    def __init__(self, manager: Manager, zone_id: str, subentry: ConfigSubentry) -> None:
         """Initialise."""
         self.manager = manager
         self.hass = manager.hass
-        self.entry_id = entry.entry_id
-        self.name = entry.title
-        opts = entry.options
+        self.entry_id = subentry.subentry_id  # unique id of this alert
+        self.zone_id = zone_id
+        self.name = subentry.title
+        opts = subentry.data
         self.template_str: str = opts[CONF_TEMPLATE]
         self.momentary = opts.get(CONF_MODE) == MODE_MOMENTARY
         self.delay = _seconds(opts.get(CONF_DELAY))
@@ -97,7 +97,6 @@ class AlertRuntime:
         self.priority = int(opts.get(CONF_PRIORITY, DEFAULT_PRIORITY))
         self.dismissible = bool(opts.get(CONF_DISMISSIBLE, False))
         self.full_strip = bool(opts.get(CONF_FULL_STRIP, False))
-        self.zones: list[str] = list(opts.get(CONF_ZONES) or [])
 
         self.raw = False  # template condition right now
         self.active = False  # raw held for `delay` (state) / inside show window (momentary)
@@ -139,8 +138,8 @@ class AlertRuntime:
         return self.enabled and self.active and not self.dismissed
 
     def applies_to(self, zone_entry_id: str) -> bool:
-        """Does this alert show in that zone?"""
-        return not self.zones or zone_entry_id in self.zones
+        """Does this alert belong to that zone?"""
+        return self.zone_id == zone_entry_id
 
     @callback
     def set_enabled(self, enabled: bool) -> None:
@@ -266,10 +265,15 @@ class ZoneRuntime:
         self.last_layout: Layout | None = None
         self._unsub: Callable[[], None] | None = None
 
+    @staticmethod
+    def key_for(entry_id: str) -> str:
+        """Short stable key used in WLED segment names (names are max 32 chars)."""
+        return entry_id[-6:]
+
     @property
     def key(self) -> str:
-        """Short stable key used in WLED segment names (names are max 32 chars)."""
-        return self.entry_id[-6:]
+        """This zone's segment-name key."""
+        return self.key_for(self.entry_id)
 
     @property
     def night(self) -> bool:
@@ -349,7 +353,7 @@ class Manager:
     @property
     def empty(self) -> bool:
         """Nothing left to manage."""
-        return not self.zones and not self.alerts
+        return not self.zones
 
     @callback
     def async_schedule_refresh(self) -> None:

@@ -17,7 +17,7 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
     """Add the zone sensor."""
-    async_add_entities([ZoneSensor(entry, entry.runtime_data)])
+    async_add_entities([ZoneSensor(entry, entry.runtime_data.zone)])
 
 
 class ZoneSensor(WledAlertsEntity, SensorEntity):
@@ -29,7 +29,7 @@ class ZoneSensor(WledAlertsEntity, SensorEntity):
 
     def __init__(self, entry: ConfigEntry, zone: ZoneRuntime) -> None:
         """Initialise."""
-        super().__init__(entry, "showing")
+        super().__init__(entry, zone, "showing")
         self._zone = zone
 
     @property
@@ -44,7 +44,7 @@ class ZoneSensor(WledAlertsEntity, SensorEntity):
         return {
             "alerts": [
                 {"name": a.name, "color": list(a.color), "style": a.style, "priority": a.priority,
-                 "dismissible": a.dismissible, "entry_id": a.entry_id}
+                 "dismissible": a.dismissible, "id": a.entry_id}
                 for a in z.shown
             ],
             "host": z.host,

@@ -4,9 +4,8 @@ from __future__ import annotations
 
 DOMAIN = "wled_alerts"
 
-CONF_ENTRY_TYPE = "entry_type"
-TYPE_ZONE = "zone"
-TYPE_ALERT = "alert"
+# The config entry is a zone; each alert is a config subentry of type "alert".
+SUBENTRY_ALERT = "alert"
 
 # Zone options
 CONF_HOST = "host"
@@ -31,7 +30,6 @@ CONF_COLOR = "color"
 CONF_STYLE = "style"
 CONF_PRIORITY = "priority"
 CONF_DISMISSIBLE = "dismissible"
-CONF_ZONES = "zones"
 CONF_FULL_STRIP = "full_strip"
 CONF_SHOW_AT_NIGHT = "show_at_night"
 

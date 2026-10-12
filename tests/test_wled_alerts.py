@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.config_entries import ConfigEntryState
+from types import MappingProxyType
+
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentry
 from homeassistant.core import HomeAssistant
 import pytest
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
@@ -18,24 +20,30 @@ from .conftest import HOST, FakeWled
 RED, BLUE, WHITE = [255, 0, 0], [0, 0, 255], [255, 255, 255]
 
 
-async def add_zone(hass: HomeAssistant, **opts) -> MockConfigEntry:
-    options = {"entry_type": "zone", "host": HOST, "start": 88, "length": 18, "anchor": "end",
+ZONE: dict[str, MockConfigEntry] = {}
+
+
+async def add_zone(hass: HomeAssistant, title: str = "Coffee bar", **opts) -> MockConfigEntry:
+    options = {"host": HOST, "start": 88, "length": 18, "anchor": "end",
                "block_size": 4, "gap": 1, "brightness": 100, "night_brightness": 25, **opts}
-    entry = MockConfigEntry(domain=DOMAIN, title="Coffee bar", options=options)
-    entry.add_to_hass(hass)
-    assert await hass.config_entries.async_setup(entry.entry_id)
-    await hass.async_block_till_done()
-    return entry
-
-
-async def add_alert(hass: HomeAssistant, title: str, template: str, **opts) -> MockConfigEntry:
-    options = {"entry_type": "alert", "active_template": template, "mode": "state", "color": RED,
-               "style": "solid", "priority": 50, "dismissible": False, "full_strip": False, **opts}
     entry = MockConfigEntry(domain=DOMAIN, title=title, options=options)
     entry.add_to_hass(hass)
     assert await hass.config_entries.async_setup(entry.entry_id)
     await hass.async_block_till_done()
+    ZONE["last"] = entry
     return entry
+
+
+async def add_alert(hass: HomeAssistant, title: str, template: str, zone: MockConfigEntry | None = None,
+                    **opts) -> str:
+    """Add an alert subentry to a running zone (like the UI's "Add alert"). Returns its id."""
+    zone = zone or ZONE["last"]
+    data = {"active_template": template, "mode": "state", "color": RED,
+            "style": "solid", "priority": 50, "dismissible": False, "full_strip": False, **opts}
+    sub = ConfigSubentry(data=MappingProxyType(data), subentry_type="alert", title=title, unique_id=None)
+    hass.config_entries.async_add_subentry(zone, sub)
+    await hass.async_block_till_done()
+    return sub.subentry_id
 
 
 async def settle(hass: HomeAssistant, seconds: float = 1) -> None:
@@ -249,6 +257,9 @@ async def test_unload_zone_cleans_strip(hass, wled_http, fake_wled: FakeWled):
     await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
     await settle(hass)
     assert fake_wled.ours()
+    await hass.config_entries.async_reload(zone.entry_id)  # reload must NOT blink the strip
+    await hass.async_block_till_done()
+    assert fake_wled.ours()
     assert await hass.config_entries.async_remove(zone.entry_id)
     await hass.async_block_till_done()
     assert fake_wled.ours() == []
@@ -259,11 +270,12 @@ async def test_two_zones_same_strip(hass, wled_http, fake_wled: FakeWled):
     hass.states.async_set("input_boolean.x", "on")
     left = await add_zone(hass, start=0, length=10, anchor="start")
     right = await add_zone(hass)
-    await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}", zones=[right.entry_id])
-    await add_alert(hass, "Y", "{{ is_state('input_boolean.x','on') }}", color=BLUE)  # all zones
+    await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}", zone=right)
+    await add_alert(hass, "Y", "{{ is_state('input_boolean.x','on') }}", zone=right, color=BLUE)
+    await add_alert(hass, "Y left", "{{ is_state('input_boolean.x','on') }}", zone=left, color=BLUE)
     await settle(hass)
     blocks = fake_wled.blocks()
-    assert (0, 4, BLUE, 0) in blocks  # Y in left zone
+    assert (0, 4, BLUE, 0) in blocks  # left zone
     assert (102, 106, RED, 0) in blocks and (97, 101, BLUE, 0) in blocks  # X then Y on the right (same priority, X first by time)
     hass.states.async_set("input_boolean.x", "off")
     await settle(hass)
@@ -281,84 +293,109 @@ async def test_template_error_is_inactive(hass, wled_http, fake_wled: FakeWled):
 
 
 # ------------------------------------------------------------------ config flow
+ZONE_FORM = {"name": "Bar", "host": HOST, "start": 88, "length": 18, "anchor": "end", "block_size": 4,
+             "gap": 1, "brightness": 100, "night_brightness": 25}
+ALERT_FORM = {"name": "Garage", "active_template": "{{ true }}", "mode": "state", "color": RED,
+              "style": "pulse", "priority": 5, "dismissible": False, "full_strip": False}
+
+
 async def test_flow_zone_then_alert(hass, wled_http, fake_wled: FakeWled):
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    assert result["type"] is FlowResultType.MENU
-    # alert before any zone -> abort
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "alert"})
-    assert result["type"] is FlowResultType.ABORT and result["reason"] == "no_zones"
-
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "zone"})
     assert result["type"] is FlowResultType.FORM
-    bad = await hass.config_entries.flow.async_configure(result["flow_id"], {
-        "name": "Bar", "host": HOST, "start": 100, "length": 18, "anchor": "end", "block_size": 4,
-        "gap": 1, "brightness": 100, "night_brightness": 25})
+    bad = await hass.config_entries.flow.async_configure(result["flow_id"], {**ZONE_FORM, "start": 100})
     assert bad["errors"] == {"length": "out_of_range"}
-    done = await hass.config_entries.flow.async_configure(result["flow_id"], {
-        "name": "Bar", "host": HOST, "start": 88, "length": 18, "anchor": "end", "block_size": 4,
-        "gap": 1, "brightness": 100, "night_brightness": 25})
+    done = await hass.config_entries.flow.async_configure(result["flow_id"], ZONE_FORM)
     assert done["type"] is FlowResultType.CREATE_ENTRY
     assert done["options"]["start"] == 88 and isinstance(done["options"]["start"], int)
     await hass.async_block_till_done()
+    zone = hass.config_entries.async_entries(DOMAIN)[0]
 
-    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "alert"})
+    result = await hass.config_entries.subentries.async_init((zone.entry_id, "alert"), context={"source": "user"})
+    assert result["type"] is FlowResultType.FORM
     with pytest.raises(InvalidData):  # HA's template selector rejects syntax errors itself
-        await hass.config_entries.flow.async_configure(result["flow_id"], {
-            "name": "Oops", "active_template": "{{ is_state('a' }}", "mode": "state", "color": RED,
-            "style": "solid", "priority": 5, "dismissible": False, "full_strip": False})
-    done = await hass.config_entries.flow.async_configure(result["flow_id"], {
-        "name": "Garage", "active_template": "{{ true }}", "mode": "state", "color": RED,
-        "style": "pulse", "priority": 5, "dismissible": False, "full_strip": False})
+        await hass.config_entries.subentries.async_configure(
+            result["flow_id"], {**ALERT_FORM, "active_template": "{{ is_state('a' }}"})
+    done = await hass.config_entries.subentries.async_configure(result["flow_id"], ALERT_FORM)
     assert done["type"] is FlowResultType.CREATE_ENTRY
     await hass.async_block_till_done()
     await settle(hass)
-    assert len(fake_wled.blocks()) == 1
+    assert fake_wled.blocks() == [(102, 106, RED, 2)]
+    assert hass.states.get("binary_sensor.garage").state == "on"
+    assert hass.states.get("switch.garage_enabled") is not None
 
 
 async def test_flow_cannot_connect(hass, wled_http, fake_wled: FakeWled):
     fake_wled.offline = True
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "zone"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {
-        "name": "Bar", "host": HOST, "start": 0, "length": 10, "anchor": "end", "block_size": 4,
-        "gap": 1, "brightness": 100, "night_brightness": 25})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {**ZONE_FORM, "start": 0, "length": 10})
     assert result["errors"] == {"host": "cannot_connect"}
 
 
-async def test_options_flow_edits_alert(hass, wled_http, fake_wled: FakeWled):
+async def test_reconfigure_alert(hass, wled_http, fake_wled: FakeWled):
     hass.states.async_set("input_boolean.x", "on")
-    await add_zone(hass)
-    alert = await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
+    zone = await add_zone(hass)
+    sid = await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
     await settle(hass)
-    result = await hass.config_entries.options.async_init(alert.entry_id)
+    result = await hass.config_entries.subentries.async_init(
+        (zone.entry_id, "alert"), context={"source": "reconfigure", "subentry_id": sid})
     assert result["type"] is FlowResultType.FORM
-    result = await hass.config_entries.options.async_configure(result["flow_id"], {
-        "active_template": "{{ is_state('input_boolean.x','on') }}", "mode": "state", "color": BLUE,
+    result = await hass.config_entries.subentries.async_configure(result["flow_id"], {
+        "name": "X", "active_template": "{{ is_state('input_boolean.x','on') }}", "mode": "state", "color": BLUE,
         "style": "pulse", "priority": 3, "dismissible": True, "full_strip": False})
-    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["type"] is FlowResultType.ABORT and result["reason"] == "reconfigure_successful"
     await hass.async_block_till_done()
     await settle(hass)
     assert fake_wled.blocks() == [(102, 106, BLUE, 2)]  # Breathe
     assert hass.states.get("button.x_dismiss") is not None
 
 
-async def test_user_turns_strip_off_while_alert_lit(hass, wled_http, fake_wled: FakeWled):
-    """Switching the strip off by hand silences current alerts; a NEW alert lights it again."""
+async def test_delete_alert(hass, wled_http, fake_wled: FakeWled):
     hass.states.async_set("input_boolean.x", "on")
-    hass.states.async_set("input_boolean.y", "off")
-    await add_zone(hass)
-    await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
-    await add_alert(hass, "Y", "{{ is_state('input_boolean.y','on') }}", color=BLUE)
+    zone = await add_zone(hass)
+    sid = await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
+    await add_alert(hass, "Y", "{{ is_state('input_boolean.x','on') }}", color=BLUE, priority=60)
     await settle(hass)
-    assert fake_wled.on is True
-    fake_wled.on = False  # someone hits the WLED app / HA light off
-    await settle(hass, 31)
-    assert fake_wled.on is False
-    assert fake_wled.ours() == []
-    assert fake_wled.segs[0]["on"] is True  # their segment restored for next time
-    hass.states.async_set("input_boolean.y", "on")  # a new alert
-    await settle(hass)
-    assert fake_wled.on is True
     assert len(fake_wled.blocks()) == 2
+    hass.config_entries.async_remove_subentry(zone, sid)
+    await hass.async_block_till_done()
+    await settle(hass)
+    assert fake_wled.blocks() == [(102, 106, BLUE, 0)]
+    assert hass.states.get("binary_sensor.x") is None
+    assert hass.states.get("binary_sensor.y").state == "on"
+
+
+async def test_edit_zone_moves_blocks(hass, wled_http, fake_wled: FakeWled):
+    hass.states.async_set("input_boolean.x", "on")
+    zone = await add_zone(hass)
+    await add_alert(hass, "X", "{{ is_state('input_boolean.x','on') }}")
+    await settle(hass)
+    result = await hass.config_entries.options.async_init(zone.entry_id)
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {
+        k: v for k, v in {**ZONE_FORM, "start": 0, "anchor": "start"}.items() if k != "name"})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    await hass.async_block_till_done()
+    await settle(hass)
+    assert fake_wled.blocks() == [(0, 4, RED, 0)]
+    assert hass.states.get("binary_sensor.x").state == "on"
+
+
+async def test_adding_alert_does_not_reload_zone(hass, wled_http, fake_wled: FakeWled):
+    """Adding an alert must not reset other alerts' running delay timers."""
+    hass.states.async_set("cover.garage", "closed")
+    zone = await add_zone(hass)
+    await add_alert(hass, "Garage open", "{{ is_state('cover.garage','open') }}", delay={"minutes": 5})
+    hass.states.async_set("cover.garage", "open")
+    await settle(hass, 200)
+    await add_alert(hass, "Other", "{{ false }}")
+    assert zone.state is ConfigEntryState.LOADED
+    assert fake_wled.blocks() == []  # still inside the 5 minutes
+    await settle(hass, 301)  # fake clock jumps are relative to real now: 301 s after opening
+    assert fake_wled.blocks() == [(102, 106, RED, 0)]
+    assert hass.states.get("binary_sensor.other").state == "off"
+
+
+async def test_v010_alert_entry_refuses_cleanly(hass, wled_http, fake_wled: FakeWled):
+    old = MockConfigEntry(domain=DOMAIN, title="Old", options={"entry_type": "alert", "active_template": "{{ true }}"})
+    old.add_to_hass(hass)
+    assert not await hass.config_entries.async_setup(old.entry_id)
+    assert fake_wled.ours() == []

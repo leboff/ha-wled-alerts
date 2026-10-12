@@ -2,10 +2,17 @@
 
 Turn part of a WLED strip into a status light. Each alert is a Home Assistant helper with a template. While the template is true, a colored block lights up in that alert's zone of the strip.
 
-- **Zones** say *where*: which WLED controller, which LEDs, which end the most important alert sits at, and brightness (with an optional night mode). You can have several zones, on one strip or on different strips.
-- **Alerts** say *when* and *how*: a template, an optional "only after X minutes", color, solid/pulse/flash, priority, and whether it can be dismissed. An alert can also take over the whole strip, which suits a doorbell.
+- **Zones** say *where*. Each zone is an integration entry: which WLED controller, which LEDs, which end the most important alert sits at, and brightness (with an optional night mode). You can have several zones, on one strip or on different strips (kitchen, office…).
+- **Alerts** say *when* and *how*. Each alert belongs to a zone: a template, an optional "only after X minutes", color, solid/pulse/flash, priority, and whether it can be dismissed. An alert can also take over the whole strip, which suits a doorbell.
 
-Everything is set up in the UI under **Settings → Devices & services → Helpers → Create helper → WLED Alerts**. To edit something, use the gear icon. To remove it, delete it.
+Everything is set up in the UI:
+
+- **Add a zone:** Settings → Devices & services → Add integration → WLED Alerts. To change it later, use the gear icon on the zone.
+- **Add an alert:** on the zone's entry, click **Add alert**.
+- **Edit an alert:** ⋮ next to it → Reconfigure.
+- **Remove an alert:** ⋮ next to it → Delete.
+
+Adding, editing or deleting an alert takes effect immediately. No restart, and other alerts' timers aren't reset.
 
 ## How it behaves
 
@@ -37,9 +44,9 @@ Each zone gets:
 
 ## Install
 
-HACS → ⋮ → Custom repositories → `https://github.com/leboff/ha-wled-alerts` (Integration). Install it, restart Home Assistant, then add helpers.
+HACS → ⋮ → Custom repositories → `https://github.com/leboff/ha-wled-alerts` (Integration). Install it, restart Home Assistant, then add a zone.
 
-Requires WLED 0.14+ (tested on 16.0.1). The core WLED integration is optional: if it's installed, it lists your devices in the zone form, and the light entities WLED creates for our segments are hidden automatically.
+Requires WLED 0.14+ (tested on 16.0.1). Needs Home Assistant 2025.6 or newer. The core WLED integration is optional: if it's installed, it lists your devices in the zone form, and the light entities WLED creates for our segments are hidden automatically.
 
 ## Notes
 

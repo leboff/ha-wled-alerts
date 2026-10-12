@@ -1,4 +1,4 @@
-"""Enable switches: one per alert (mute) and one per zone (pause the whole zone)."""
+"""Enable switches: one per zone (pause the zone) and one per alert (mute it)."""
 
 from __future__ import annotations
 
@@ -7,10 +7,11 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
+from . import register_adder
 from .entity import WledAlertsEntity
 from .manager import AlertRuntime, ZoneRuntime
 
@@ -18,8 +19,14 @@ from .manager import AlertRuntime, ZoneRuntime
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """Add the enable switch."""
-    async_add_entities([EnabledSwitch(entry, entry.runtime_data)])
+    """Zone switch now; alert switches now and for alerts added later."""
+    async_add_entities([EnabledSwitch(entry, entry.runtime_data.zone)])
+
+    @callback
+    def add(alert: AlertRuntime) -> None:
+        async_add_entities([EnabledSwitch(entry, alert)], config_subentry_id=alert.entry_id)
+
+    register_adder(entry, add)
 
 
 class EnabledSwitch(WledAlertsEntity, SwitchEntity, RestoreEntity):
@@ -30,11 +37,11 @@ class EnabledSwitch(WledAlertsEntity, SwitchEntity, RestoreEntity):
 
     def __init__(self, entry: ConfigEntry, runtime: AlertRuntime | ZoneRuntime) -> None:
         """Initialise."""
-        super().__init__(entry, "enabled")
+        super().__init__(entry, runtime, "enabled")
         self._runtime = runtime
 
     async def async_added_to_hass(self) -> None:
-        """Restore the last on/off."""
+        """Restore the last on/off (and an alert's dismissed flag)."""
         await super().async_added_to_hass()
         last = await self.async_get_last_state()
         if last is not None and last.state in ("on", "off"):

@@ -6,9 +6,10 @@ from typing import Any
 
 from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
+from . import register_adder
 from .entity import WledAlertsEntity
 from .manager import AlertRuntime
 
@@ -16,19 +17,24 @@ from .manager import AlertRuntime
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddConfigEntryEntitiesCallback
 ) -> None:
-    """Add the alert's sensor."""
-    async_add_entities([AlertActiveSensor(entry, entry.runtime_data)])
+    """One sensor per alert (now and for alerts added later)."""
+
+    @callback
+    def add(alert: AlertRuntime) -> None:
+        async_add_entities([AlertActiveSensor(entry, alert)], config_subentry_id=alert.entry_id)
+
+    register_adder(entry, add)
 
 
 class AlertActiveSensor(WledAlertsEntity, BinarySensorEntity):
-    """On while the alert is showing (or would show, if muted/dismissed)."""
+    """On while the alert's condition holds (after any delay), even if muted/dismissed."""
 
     _attr_name = None  # the device name, e.g. "Garage open"
     _attr_icon = "mdi:alarm-light-outline"
 
     def __init__(self, entry: ConfigEntry, alert: AlertRuntime) -> None:
         """Initialise."""
-        super().__init__(entry, "active")
+        super().__init__(entry, alert, "active")
         self._alert = alert
 
     @property
