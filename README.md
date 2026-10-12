@@ -1,6 +1,6 @@
 # WLED Alerts for Home Assistant
 
-Turn part of a WLED strip into a status light. Each alert is a Home Assistant helper with a template. While the template is true, a colored block lights up in that alert's zone of the strip.
+Turn part of a WLED strip into a status light. Each alert is a template; while it's true, a colored block lights up in that alert's zone of the strip.
 
 - **Zones** say *where*. Each zone is an integration entry: which WLED controller, which LEDs, which end the most important alert sits at, and brightness (with an optional night mode). You can have several zones, on one strip or on different strips (kitchen, office…).
 - **Alerts** say *when* and *how*. Each alert belongs to a zone: a template, an optional "only after X minutes", color, solid/pulse/flash, priority, and whether it can be dismissed. An alert can also take over the whole strip, which suits a doorbell.
