@@ -8,6 +8,8 @@ from homeassistant.components.binary_sensor import BinarySensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from . import register_adder
 from .entity import WledAlertsEntity
@@ -26,7 +28,7 @@ async def async_setup_entry(
     register_adder(entry, add)
 
 
-class AlertActiveSensor(WledAlertsEntity, BinarySensorEntity):
+class AlertActiveSensor(WledAlertsEntity, BinarySensorEntity, RestoreEntity):
     """On while the alert's condition holds (after any delay), even if muted/dismissed."""
 
     _attr_name = None  # the device name, e.g. "Garage open"
@@ -36,6 +38,14 @@ class AlertActiveSensor(WledAlertsEntity, BinarySensorEntity):
         """Initialise."""
         super().__init__(entry, alert, "active")
         self._alert = alert
+
+    async def async_added_to_hass(self) -> None:
+        """Remember how long the condition had been true before a restart/reload."""
+        await super().async_added_to_hass()
+        last = await self.async_get_last_state()
+        since = (last.attributes or {}).get("condition_since") if last else None
+        if since and self._alert.true_since is None:
+            self._alert.restored_true_since = dt_util.parse_datetime(str(since))
 
     @property
     def is_on(self) -> bool:
@@ -49,6 +59,7 @@ class AlertActiveSensor(WledAlertsEntity, BinarySensorEntity):
         return {
             "showing": a.shown,
             "condition": a.raw,
+            "condition_since": a.true_since.isoformat() if a.true_since else None,
             "enabled": a.enabled,
             "dismissed": a.dismissed,
             "dismissible": a.dismissible,

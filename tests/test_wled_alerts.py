@@ -399,3 +399,41 @@ async def test_v010_alert_entry_refuses_cleanly(hass, wled_http, fake_wled: Fake
     old.add_to_hass(hass)
     assert not await hass.config_entries.async_setup(old.entry_id)
     assert fake_wled.ours() == []
+
+
+async def test_delay_counts_from_when_condition_became_true(hass, wled_http, fake_wled: FakeWled, freezer):
+    """Alert created while the door has already been open 8 min: lights after 2 more, not 10."""
+    freezer.move_to("2026-10-12 18:00:00+00:00")
+    hass.states.async_set("binary_sensor.patio", "on")
+    freezer.move_to("2026-10-12 18:08:00+00:00")
+    await add_zone(hass)
+    await add_alert(hass, "Door", "{{ is_state('binary_sensor.patio','on') }}", delay={"minutes": 10})
+    await settle(hass)
+    assert fake_wled.blocks() == []
+    freezer.move_to("2026-10-12 18:10:05+00:00")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    await settle(hass)
+    assert fake_wled.blocks() == [(102, 106, RED, 0)]
+
+
+async def test_delay_survives_reload(hass, wled_http, fake_wled: FakeWled, freezer):
+    """The countdown keeps its start time across a reload/restart (restored from the sensor)."""
+    freezer.move_to("2026-10-12 18:00:00+00:00")
+    hass.states.async_set("binary_sensor.patio", "off")
+    zone = await add_zone(hass)
+    await add_alert(hass, "Door", "{{ is_state('binary_sensor.patio','on') }}", delay={"minutes": 10})
+    hass.states.async_set("binary_sensor.patio", "on")
+    await hass.async_block_till_done()
+    freezer.move_to("2026-10-12 18:07:00+00:00")
+    # after a restart every entity's last_changed is "now"; simulate that
+    hass.states.async_set("binary_sensor.patio", "on", force_update=True)
+    await hass.config_entries.async_reload(zone.entry_id)
+    await hass.async_block_till_done()
+    await settle(hass)
+    assert fake_wled.blocks() == []
+    freezer.move_to("2026-10-12 18:10:05+00:00")
+    async_fire_time_changed(hass)
+    await hass.async_block_till_done()
+    await settle(hass)
+    assert fake_wled.blocks() == [(102, 106, RED, 0)]

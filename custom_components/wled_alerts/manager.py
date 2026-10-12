@@ -106,6 +106,9 @@ class AlertRuntime:
         self.last_result: str | None = None
         self.error: str | None = None
 
+        self.true_since: datetime | None = None  # when the condition became true
+        self.restored_true_since: datetime | None = None  # from before an HA restart / reload
+        self._info: Any = None
         self._first = True
         self._last_truthy: str | None = None
         self._timer: CALLBACK_TYPE | None = None
@@ -120,6 +123,7 @@ class AlertRuntime:
             [TrackTemplate(Template(self.template_str, self.hass), None)],
             self._on_result,
         )
+        self._info = info
         info.async_refresh()
         self._unsub = info.async_remove
 
@@ -210,16 +214,40 @@ class AlertRuntime:
             raw = False if isinstance(result, TemplateError) else result_as_boolean(result)
             if raw and not self.raw:
                 self._cancel_timer()
-                if self.delay > 0:
-                    self._timer = async_call_later(self.hass, self.delay, self._delay_done)
+                now = dt_util.utcnow()
+                # On the first evaluation (startup, alert just created) the condition may
+                # have been true for a while already: count the delay from then.
+                self.true_since = self._initial_true_since(now) if first else now
+                remaining = self.delay - (now - self.true_since).total_seconds()
+                if self.delay > 0 and remaining > 0:
+                    self._timer = async_call_later(self.hass, remaining, self._delay_done)
                 else:
                     self._set_active(True)
             elif not raw:
                 self._cancel_timer()
+                self.true_since = None
                 self._set_active(False)
                 self.dismissed = False
             self.raw = raw
         self._changed()
+
+    def _initial_true_since(self, now: datetime) -> datetime:
+        """Best guess of when an already-true condition became true.
+
+        Prefer what we saved before a restart/reload. Otherwise use the most recent
+        last_changed of the entities the template reads: the condition can't have
+        turned true before its inputs last changed, so this never fires early.
+        """
+        if self.restored_true_since is not None and self.restored_true_since <= now:
+            return self.restored_true_since
+        entities = set()
+        if self._info is not None:
+            try:
+                entities = set(self._info.listeners.get("entities") or ())
+            except (AssertionError, AttributeError):
+                entities = set()
+        changed = [s.last_changed for e in entities if (s := self.hass.states.get(e)) is not None]
+        return min(max(changed), now) if changed else now
 
     @callback
     def _delay_done(self, _now: datetime) -> None:
