@@ -1,0 +1,139 @@
+{
+  "title": "WLED Alerts",
+  "config": {
+    "step": {
+      "user": {
+        "title": "WLED Alerts",
+        "description": "A **zone** is a stretch of LEDs on a WLED strip where alerts show up. An **alert** is one thing to show there (garage open, doorbell…). Create a zone first.",
+        "menu_options": {
+          "zone": "Zone (which strip, which LEDs)",
+          "alert": "Alert (when to light up, what color)"
+        }
+      },
+      "zone": {
+        "title": "New zone",
+        "description": "Pick the WLED controller and the LEDs to use. LED numbers start at 0 at the end where the strip is wired.",
+        "data": {
+          "name": "Name",
+          "host": "WLED controller",
+          "start": "First LED",
+          "length": "Number of LEDs",
+          "anchor": "Most important alert sits at",
+          "block_size": "LEDs per alert",
+          "gap": "Dark LEDs between alerts",
+          "brightness": "Brightness",
+          "night_entity": "Night mode when this is on",
+          "night_brightness": "Night brightness"
+        },
+        "data_description": {
+          "host": "Pick a WLED device HA already knows, or type an IP address.",
+          "anchor": "Alerts stack from this end of the zone, most important first.",
+          "block_size": "If there isn't room for every alert, blocks shrink (down to 2 LEDs) and the least important ones are left out.",
+          "night_entity": "For example a schedule like Night Dimming. Optional."
+        }
+      },
+      "alert": {
+        "title": "New alert",
+        "description": "Write a template that is true while the alert should show. Example: `{{ is_state('cover.garage_door', 'open') }}`",
+        "data": {
+          "name": "Name",
+          "active_template": "Active when (template)",
+          "mode": "Kind",
+          "delay": "Only after it's been true for",
+          "show_for": "Show for (momentary only)",
+          "color": "Color",
+          "style": "Style",
+          "priority": "Priority (1 = most important)",
+          "dismissible": "Can be dismissed",
+          "full_strip": "Use the whole strip",
+          "zones": "Zones (empty = all)"
+        },
+        "data_description": {
+          "mode": "Condition: lit while the template is true. Momentary: the template returns something that changes when the event happens (e.g. the last doorbell press time) and the alert shows for a while.",
+          "delay": "Condition alerts only. E.g. garage open for 5 minutes.",
+          "dismissible": "Adds a Dismiss button. A dismissed alert stays hidden until its condition clears, then re-arms.",
+          "full_strip": "Takes over the entire strip while showing (good for the doorbell)."
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Couldn't reach that WLED controller.",
+      "out_of_range": "That LED range runs past the end of the strip.",
+      "invalid_template": "The template has a syntax error."
+    },
+    "abort": {
+      "no_zones": "Create a zone first (Create helper → WLED Alerts → Zone)."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Edit",
+        "data": {
+          "host": "WLED controller",
+          "start": "First LED",
+          "length": "Number of LEDs",
+          "anchor": "Most important alert sits at",
+          "block_size": "LEDs per alert",
+          "gap": "Dark LEDs between alerts",
+          "brightness": "Brightness",
+          "night_entity": "Night mode when this is on",
+          "night_brightness": "Night brightness",
+          "active_template": "Active when (template)",
+          "mode": "Kind",
+          "delay": "Only after it's been true for",
+          "show_for": "Show for (momentary only)",
+          "color": "Color",
+          "style": "Style",
+          "priority": "Priority (1 = most important)",
+          "dismissible": "Can be dismissed",
+          "full_strip": "Use the whole strip",
+          "zones": "Zones (empty = all)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Couldn't reach that WLED controller.",
+      "out_of_range": "That LED range runs past the end of the strip.",
+      "invalid_template": "The template has a syntax error."
+    }
+  },
+  "selector": {
+    "anchor": {
+      "options": {
+        "start": "First LED end",
+        "end": "Last LED end"
+      }
+    },
+    "mode": {
+      "options": {
+        "state": "Condition (lit while true)",
+        "momentary": "Momentary (event, shows for a while)"
+      }
+    },
+    "style": {
+      "options": {
+        "solid": "Solid",
+        "pulse": "Pulse",
+        "flash": "Flash"
+      }
+    }
+  },
+  "entity": {
+    "switch": {
+      "enabled": {
+        "name": "Enabled"
+      }
+    },
+    "button": {
+      "dismiss": {
+        "name": "Dismiss"
+      }
+    },
+    "sensor": {
+      "showing": {
+        "name": "Alerts showing"
+      }
+    }
+  }
+}
